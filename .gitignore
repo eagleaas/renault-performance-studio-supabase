@@ -1,0 +1,5 @@
+node_modules/
+.next/
+public/studio.html
+public/lib/
+.env.local
