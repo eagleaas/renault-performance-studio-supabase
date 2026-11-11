@@ -129,15 +129,28 @@
     async list() { return { assets: [], usage: {} }; },
   });
 
-  let mePromise = null;
-  async function loadMe() {
+  let meCache = null;
+  // A transient network blip while fetching the profile must not permanently
+  // strip admin rights for the rest of the page session: retry a couple of
+  // times here, and only cache a *successful* result (a failure clears the
+  // cache so the next caller gets a fresh attempt instead of a stuck answer).
+  async function loadMe(attempt) {
+    attempt = attempt || 0;
     const { data: auth } = await sb.auth.getUser();
     const u = auth && auth.user;
     if (!u) return null;
-    const { data: profile } = await sb.from('profiles').select('name, role').eq('id', u.id).maybeSingle();
+    const { data: profile, error } = await sb.from('profiles').select('name, role').eq('id', u.id).maybeSingle();
+    if (error) {
+      console.error('[supashim] failed to load profile (attempt ' + (attempt + 1) + '):', error);
+      if (attempt < 2) { await new Promise(r => setTimeout(r, 400 * (attempt + 1))); return loadMe(attempt + 1); }
+      throw error;
+    }
     return { id: u.id, login: u.email, name: (profile && profile.name) || u.email, admin: !!profile && profile.role === 'admin', local: false, auth: 'password' };
   }
-  const me = () => (mePromise = mePromise || loadMe());
+  function me() {
+    if (!meCache) meCache = loadMe().catch(e => { meCache = null; throw e; });
+    return meCache;
+  }
   sb.auth.onAuthStateChange((event) => { if (event === 'SIGNED_OUT') location.href = '/login'; });
 
   const user = Object.freeze({
