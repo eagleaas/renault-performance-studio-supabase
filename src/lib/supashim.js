@@ -22,12 +22,25 @@
     try { await fetchCol(col); notify(col); }
     catch (e) { console.error('[supashim] failed to load collection "' + col + '":', e); notifyErr(col, e); }
   }
+  // 15s poll stays as a safety net; real-time (below) is what makes cross-device sync near-instant.
   setInterval(() => { for (const col of listeners.keys()) pull(col); }, 15000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) for (const col of listeners.keys()) pull(col); });
+
+  const realtimeChannels = new Map(); // col -> channel
+  function ensureRealtime(col) {
+    if (realtimeChannels.has(col)) return;
+    const channel = sb
+      .channel('documents-' + col)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'documents', filter: `collection=eq.${col}` }, () => pull(col))
+      .subscribe();
+    realtimeChannels.set(col, channel);
+  }
+
   const subscribe = (col, fn, errFn) => {
     if (!listeners.has(col)) listeners.set(col, new Set());
     listeners.get(col).add(fn);
     if (errFn) { if (!errListeners.has(col)) errListeners.set(col, new Set()); errListeners.get(col).add(errFn); }
+    ensureRealtime(col);
     if (cache.has(col)) setTimeout(fn, 0); else pull(col);
     return () => { listeners.get(col).delete(fn); if (errFn) errListeners.get(col).delete(errFn); };
   };

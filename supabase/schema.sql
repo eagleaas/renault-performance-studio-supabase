@@ -138,6 +138,10 @@ create policy "only admins can delete from blobs bucket"
   to authenticated
   using (bucket_id = 'blobs' and public.is_admin(auth.uid()));
 
+-- 6. Enable Realtime on documents, so edits on one device/computer appear on
+--    every other open tab within ~1 second instead of waiting on the 15s poll.
+alter publication supabase_realtime add table public.documents;
+
 -- 5. After running this once, make yourself an admin (replace with your email):
 --    update public.profiles set role = 'admin'
 --    where id = (select id from auth.users where email = 'you@example.com');
