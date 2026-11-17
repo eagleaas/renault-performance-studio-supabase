@@ -593,6 +593,7 @@ function pageOverview() {
   const hasPY = py.lines > 0;
   const cmpNote = (a, b, invert) => (hasPY ? `${deltaChip(chg(a, b), invert)}vs same months ${Math.floor(A.f.s / 100) - 1}` : 'No prior-year data loaded');
   const ach = cur.ach;
+  const xv = extraVals(cur), xp = hasPY ? extraVals(prevY) : null, xn = k => cmpNote(xv[k], xp ? xp[k] : NaN);
   let h = cards([
     { label: 'Total revenue', value: egpC(sm.rev), note: `${cmpNote(sm.rev, py.rev)}<br>Signed net invoiced, refunds kept`, t: '' },
     /* no target for the months chosen: say which month's Target file is missing instead of showing EGP 0 */
@@ -610,6 +611,18 @@ function pageOverview() {
     { label: 'Periodic-maintenance ROs', value: fmtInt(sm.perRos), count: true, note: `${cmpNote(sm.perRos, py.perRos)}<br>Recognised by job description rules`, t: 't-blue' },
     { label: 'PDI vehicles', value: fmtInt(sm.pdiVins), count: true, note: 'Proxy for sales, not confirmed retail deliveries', t: 't-mag' },
     { label: 'Revenue per working day', value: egpC(cur.revWd), note: cur.days.missing.length ? `Working days missing for ${cur.days.missing.map(ymLbl).join(', ')}` : `${cur.days.wd} working days from target reports`, t: 't-dark' },
+    // the same figures as 18.1 (History, year by year), for the selected months
+    { label: 'Parts revenue', value: egpC(xv.parts), note: `${xn('parts')}<br>Parts lines`, t: 't-blue' },
+    { label: 'Labour revenue', value: egpC(xv.labour), note: `${xn('labour')}<br>Labour lines`, t: 't-blue' },
+    { label: 'Other revenue', value: egpC(xv.other), note: `${xn('other')}<br>Lines that are neither labour nor parts` },
+    { label: 'Labour + other revenue', value: egpC(xv.lo), note: xn('lo'), t: 't-dark' },
+    { label: 'Labour rate', value: egp(xv.labRate), note: `${xn('labRate')}<br>Labour revenue ÷ billed hours (EGP per hour)`, t: 't-amber' },
+    { label: 'Cash labour rate', value: egp(xv.cashRate), note: `${xn('cashRate')}<br>Same, on cash lines only`, t: 't-amber' },
+    { label: 'Warranty labour rate', value: egp(xv.warRate), note: `${xn('warRate')}<br>Same, on warranty lines only`, t: 't-amber' },
+    { label: 'Oil consumed', value: Number.isFinite(xv.oilT) ? `${fmtNum1(xv.oilT)} t` : 'N/A', note: `${xn('oilT')}<br>Engine oil from the oil list, in tonnes`, t: 't-mag' },
+    { label: 'Oil price', value: egp(xv.oilP), note: `${xn('oilP')}<br>Oil revenue ÷ litres (EGP per litre)`, t: 't-mag' },
+    { label: 'Repair orders', value: fmtInt(xv.ro), count: true, note: `${xn('ro')}<br>Distinct branch + RO, PDI included`, t: 't-dark' },
+    { label: 'Repeat vehicles', value: fmtInt(xv.rep), count: true, note: Number.isFinite(xv.rep) ? `${xn('rep')}<br>Vehicles that also came in the 12 months before` : 'Needs the 12 months before the period loaded', t: 't-blue' },
   ]);
   { const al = buildAlerts(); if (al.length) h += `<div class="notice ${al.some(a => a.level === 'warn') ? 'err' : ''}"><b>${al.length} alert${al.length > 1 ? 's' : ''}.</b> ${al.slice(0, 3).map(a => a.text).join(' ')} <button class="btn small secondary" data-act="goto" data-page="alerts">See all</button></div>`; }
   { const comps = ['L', 'P', 'O'].map(c => C.achievement(A.S, A.T, cur.f, c)); h += sec('Labour, parts and other against budget', 'The DSR split: each component against its own budget from the target reports.', hbars(comps.map((a, k) => ({ label: ['Labour', 'Parts', 'Other'][k], segs: [{ v: a.revenue, color: Number.isFinite(a.ach) ? statusColor(a.ach) : 'var(--blue)' }], marker: a.target, value: `<b>${egpC(a.revenue)}</b>`, sub: achLine(a.revenue, a.target) + `<br><span class="mini">${pct(sm.rev ? [sm.labour, sm.parts, sm.other][k] / sm.rev : NaN)} of revenue</span>` })), { aria: 'Labour parts other' })); }
@@ -1372,10 +1385,15 @@ function histPeriodVals(s0, e0) {
     if (all && a > 0) { v.rev = a; if (pa > 0) v.parts = pa; if (la > 0) v.labour = la; if (oa > 0) v.other = oa; if (la + oa > 0) v.lo = la + oa; }
     return v;
   }
-  const sm = st.sm; Object.assign(v, { rev: sm.rev, parts: sm.parts, labour: sm.labour, other: sm.other, lo: sm.labour + sm.other, vtp: sm.vins, ro: sm.ros, pdi: sm.pdiVins });
-  const oc = oilCalc(F({ s: s0, e: e0 })).tot; v.oilT = oc.kg / 1000; v.oilP = oc.l > 0 ? oc.net / oc.l : NaN;
+  const sm = st.sm; Object.assign(v, { rev: sm.rev, vtp: sm.vins, pdi: sm.pdiVins }, extraVals(st));
+  return v;
+}
+/* figures shared by 18.1 (year by year) and the overview key figures (2.1, and 1.1 when Comparison shows the Overview) */
+function extraVals(st) {
+  const S = A.S, sm = st.sm, s0 = st.f.s;
+  const v = { parts: sm.parts, labour: sm.labour, other: sm.other, lo: sm.labour + sm.other, ro: sm.ros, labRate: sm.labourRate, cashRate: NaN, warRate: NaN, oilT: NaN, oilP: NaN, rep: NaN };
+  const oc = oilCalc(F({ s: st.f.s, e: st.f.e })).tot; v.oilT = oc.kg / 1000; v.oilP = oc.l > 0 ? oc.net / oc.l : NaN;
   // labour rate = labour revenue ÷ billed hours; warranty rate = the same on warranty lines only
-  v.labRate = sm.labourRate;
   { let wl = 0, wh = 0, cl = 0, ch = 0; for (const i of st.idx) { if (S.cw[i] === 1) { wl += S.netL[i]; wh += S.hours[i]; } else { cl += S.netL[i]; ch += S.hours[i]; } } v.warRate = wh > 0 ? wl / wh : NaN; v.cashRate = ch > 0 ? cl / ch : NaN; }
   // vehicles of the period that also came in the 12 months before it
   const p0 = C.ymAdd(s0, -12), p1 = C.ymAdd(s0, -1);
