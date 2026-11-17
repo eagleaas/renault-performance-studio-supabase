@@ -634,6 +634,8 @@ function pageOverview() {
   h += `<div class="two">${sec('Revenue by payer', 'Customer-pay includes insurance and fleet accounts billed as cash; warranty and PDI come from the C/W column.', hbars(pay.map(p => ({ label: p[0], segs: [{ v: p[1], color: p[2] }], value: egp(p[1]), sub: pct(sm.rev ? p[1] / sm.rev : NaN) + ' of revenue' })), { aria: 'Revenue by payer' }))}
   ${sec('EM, BS and PDI performance', 'Mechanical workshop, body shop and pre-delivery inspection, each with its distinct repair orders.', hbars(['EM', 'BS', 'PDI'].map((a, i) => ({ label: a === 'EM' ? 'EM · mechanical' : a === 'BS' ? 'BS · body shop' : 'PDI · pre-delivery', segs: [{ v: sm.act[i], color: `var(--c${i + 1})` }], value: `${egp(sm.act[i])} <span class="mini">(${pct(sm.rev ? sm.act[i] / sm.rev : NaN)})</span>`, sub: `${fmtInt(actIdxRos[i])} ROs · ${egpC(actIdxRos[i] ? sm.act[i] / actIdxRos[i] : NaN)}/RO` })), { aria: 'Revenue by activity' }))}</div>`;
   h += billingTrendSection(cur.idx);
+  h += billingTrendSection(cur.idx, 'P');
+  h += billingTrendSection(cur.idx, 'L');
   h += scorecardSection(cur);
   h += dayComparisonSection();
   h += growthDrivers(cur, prevY);
@@ -660,15 +662,17 @@ function comparisonSection() {
   });
   return sec('Period comparisons', `Ending ${ymLbl(e)}. Year to date compares the same months of the prior year that are loaded; revenue per working day uses working days from the target reports.`, table(['Comparison', 'Revenue', 'Comparison revenue', 'Change', 'Rev / working day', 'Comparison', 'Change', 'Car entries', 'Change', 'Discount rate', 'Change'], rows));
 }
-function billingTrendSection(idx) {
-  const S = A.S, g = A.trendGran;
+// comp: undefined = total revenue (2.6) · 'P' = parts lines (2.7) · 'L' = labour lines (2.8)
+function billingTrendSection(idx, comp) {
+  const S = A.S, g = A.trendGran, val = comp === 'P' ? S.netP : comp === 'L' ? S.netL : S.net;
+  const what = comp === 'P' ? 'Parts revenue' : comp === 'L' ? 'Labour revenue' : 'Revenue', title = comp === 'P' ? 'Parts billing trend' : comp === 'L' ? 'Labour billing trend' : 'Billing trend';
   const acc = new Map();
   for (const i of idx) {
     let k;
     if (g === 'day') k = S.day[i];
     else if (g === 'week') { const d = C.intToDate(S.day[i]); d.setUTCDate(d.getUTCDate() - d.getUTCDay()); k = C.dateToInt(d); }
     else k = S.ym[i];
-    acc.set(k, (acc.get(k) || 0) + S.net[i]);
+    acc.set(k, (acc.get(k) || 0) + val[i]);
   }
   let keys = [...acc.keys()].sort((a, b) => a - b);
   if (g === 'month') { keys = []; for (let m = A.f.s; m <= A.f.e; m = C.ymAdd(m, 1)) keys.push(m); }
@@ -677,7 +681,7 @@ function billingTrendSection(idx) {
   const missing = g === 'month' ? keys.map(k => !A.coverage.has(k) && !acc.has(k)) : [];
   const status = keys.map(k => (g === 'month' && k === C.ymOf(S.maxDay) && S.maxDay % 100 < C.daysInMonth(k) ? 'partial' : (g === 'week' ? 'complete' : 'complete')));
   const toggle = `<div class="choices">${[['month', 'Monthly'], ['week', 'Weekly'], ['day', 'Daily']].map(x => `<button class="choice ${g === x[0] ? 'on' : ''}" data-act="gran" data-v="${x[0]}">${x[1]}</button>`).join('')}</div>`;
-  return sec('Billing trend', `Revenue by billing date${g === 'week' ? ' (weeks start on Sunday)' : ''}. Late-posted lines sit in the month they were billed.`, lineChart({ labels, series: [{ name: 'Revenue (EGP)', color: 'var(--blue)', values, status }], missing, fmt: 'money', aria: 'Billing trend' }), toggle);
+  return sec(title, `${what} by billing date${g === 'week' ? ' (weeks start on Sunday)' : ''}. Late-posted lines sit in the month they were billed.${comp ? ' The Monthly / Weekly / Daily choice applies to all three billing trends.' : ''}`, lineChart({ labels, series: [{ name: `${what} (EGP)`, color: comp === 'P' ? 'var(--c2)' : comp === 'L' ? 'var(--c3)' : 'var(--blue)', values, status }], missing, fmt: 'money', aria: title }), toggle);
 }
 function scorecardSection(cur) {
   const S = A.S, ach = cur.ach;
