@@ -230,10 +230,37 @@ async function partsXlsx() {
     rows.forEach((r, i) => r.forEach((v, c) => { if (c < 2 || typeof v !== 'number') return; const a = X.utils.encode_cell({ r: i + 4, c }); if (ws[a]) ws[a].z = /change/.test(head[c]) ? '+0.0%;-0.0%' : /units/i.test(head[c]) ? '#,##0.##' : '#,##0'; }));
     ws['!cols'] = head.map((h, c) => ({ wch: c === 0 ? 18 : c === 1 ? 32 : c === 2 ? 34 : /change/.test(h) ? 13 : /EGP/.test(h) ? 16 : 13 }));
     const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, 'Spare parts');
+    X.utils.book_append_sheet(wb, partVinSheet(X, m), 'VINs per part');
     let blob = new Blob([X.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     try { blob = await themePartsXlsx(blob, T, T.groups); } catch (e) { console.warn('Excel colours skipped', e); }
     setBusy(null); await saveFile(`Spare parts ${ymLbl(A.f.s)}-${ymLbl(A.f.e)}.xlsx`, blob);
   } catch (e) { setBusy(null); console.error(e); toast('Could not build the part list: ' + (e.message || e), true); }
+}
+/* sheet 2 of the part list: every vehicle that bought each part number of sheet 1, in the same period and filters */
+function partVinRows(list) {
+  const S = A.S, PL = S.PL, head = ['Part number', 'Name', 'VIN', 'RO number', 'Customer name', 'Model', 'Branch', 'Billing date', 'Cash / Warranty', 'Units', 'Revenue (EGP)'];
+  if (!PL || !PL.n) return { head, rows: [] };
+  const order = new Map(); list.forEach((x, k) => order.set(x.m, k));
+  const inSel = new Uint8Array(S.n); for (const i of C.select(S, F())) inSel[i] = 1;
+  const vinOf = v => (v >= 0 ? S.vins[v] : v <= -2 ? S.phNames[-2 - v] : '');
+  const dd = d => `${String(d % 100).padStart(2, '0')}/${String(Math.floor(d / 100) % 100).padStart(2, '0')}/${Math.floor(d / 10000)}`;
+  const out = [];
+  for (let k = 0; k < PL.n; k++) {
+    const r = PL.row[k], pos = order.get(PL.mat[k]); if (pos === undefined || !inSel[r]) continue;
+    const code = S.mats[PL.mat[k]], rk = S.roKeys[S.ro[r]];
+    out.push({ pos, day: S.day[r], cells: [code, partName(code), vinOf(S.vin[r]), rk.slice(rk.indexOf('|') + 1), S.cust[r] >= 0 ? S.custNames[S.cust[r]] : '', S.models[S.model[r]], S.branches[S.br[r]], dd(S.day[r]), S.cw[r] === 1 ? 'Warranty' : S.cw[r] === 2 ? 'PDI' : 'Cash', Math.round(PL.qty[k] * 100) / 100, Math.round(PL.net[k])] });
+  }
+  out.sort((a, b) => a.pos - b.pos || a.day - b.day);
+  return { head, rows: out.map(x => x.cells) };
+}
+function partVinSheet(X, list) {
+  const S = A.S, T = partVinRows(list);
+  const note = !S.plLoaded ? 'Some or all of these months were imported before VINs per part were saved: upload their DSR achieved files again to fill this sheet.'
+    : !S.custNames.length ? 'Customer name is empty: the customer column of the DSR export is not mapped yet.' : 'One row per part number and repair order. Same period and filters as sheet 1.';
+  const ws = X.utils.aoa_to_sheet([[`VINs per part number — ${ymLbl(A.f.s)} to ${ymLbl(A.f.e)} · ${scopeText()} · ${fmtInt(T.rows.length)} rows`], [note], T.head].concat(T.rows));
+  ws['!cols'] = [16, 30, 20, 14, 30, 22, 16, 12, 14, 9, 14].map(w => ({ wch: w }));
+  if (T.rows.length) ws['!autofilter'] = { ref: `A3:K${T.rows.length + 3}` };
+  return ws;
 }
 /* upload part names: any sheet with a part-number column and a name column; the first such sheet is used */
 /* advisor IDs from an Excel: a name column + an ID column (header found by name) → the advisor code list */
@@ -358,7 +385,7 @@ async function rebuild() {
   saveSnapshot(bkey);
   afterBuild(txn);
 }
-const STORE_VERSION = 6;
+const STORE_VERSION = 7;
 function saveSnapshot(key) {
   if (A.local || !A.S || !A.S.n) return;
   try {
@@ -1917,7 +1944,10 @@ async function saveStaging() {
 function chunkAsset(a) {
   const json = JSON.stringify(a); if (json.length < 15e6) return [a];
   const parts = Math.ceil(json.length / 12e6), per = Math.ceil(a.rows.length / parts), out = [];
-  for (let i = 0; i < a.rows.length; i += per) out.push(Object.assign({}, a, { rows: a.rows.slice(i, i + per), parts: i ? [] : a.parts, issues: i ? [] : a.issues, jobCount: i ? a.jobs.map(() => 0) : a.jobCount }));
+  // part-line links and customer names point at rows, so each chunk keeps its own, re-counted from the chunk's first row
+  for (let i = 0; i < a.rows.length; i += per) out.push(Object.assign({}, a, { rows: a.rows.slice(i, i + per), parts: i ? [] : a.parts, issues: i ? [] : a.issues, jobCount: i ? a.jobs.map(() => 0) : a.jobCount },
+    a.plines ? { plines: a.plines.filter(e => e[0] >= i && e[0] < i + per).map(e => [e[0] - i, e[1], e[2], e[3], e[4]]) } : {},
+    a.gcust ? { gcust: a.gcust.slice(i, i + per) } : {}));
   return out;
 }
 async function deleteImport(id) {

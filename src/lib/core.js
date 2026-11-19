@@ -119,6 +119,8 @@ const TXN_FIELDS = {
   billing: ['billingdate', 'invoicedate'], adviser: ['serviceadviser', 'serviceadvisor', 'adviser', 'advisor'],
   job: ['jobdescription', 'job'], model: ['model', 'vehiclemodel'], net: ['netprice', 'netvalue', 'netamount'],
   payer: ['payer'], discPct: ['discount'], discVal: ['discountvalue', 'discountamount'], embs: ['embs'], cw: ['cw'], lvg: ['lvg'],
+  // customer name: left empty until the column heading in the DSR export is confirmed (never guessed)
+  cust: [],
 };
 const TXN_REQUIRED = ['plant', 'order', 'billing', 'net'];
 const TXN_LABELS = { plant:'Plant', split:'RO Split', act:'EM/BS/PDI', vin:'VIN', order:'Order', qty:'Billed Quantity', created:'Created On', billing:'Billing Date', adviser:'Service Advisor', job:'Job description', model:'Model', net:'Net price', payer:'Payer', discPct:'Discount %', discVal:'Discount value', embs:'EM/BS', cw:'C / W', lvg:'LV G' };
@@ -150,7 +152,9 @@ function parseTxnRows(rows, fileName) {
   const hdr = rows[h].map(str), map = mapTxnHeader(hdr);
   const missing = TXN_REQUIRED.filter(f => map[f] == null);
   if (missing.length) return { ok: false, error: 'Missing required columns: ' + missing.map(f => TXN_LABELS[f]).join(', '), header: hdr, map };
-  const D = { plant: [], act: [], vin: [], model: [], adv: [], cw: [], lvg: [], split: [], payer: [], mat: [] }, I = {};
+  const D = { plant: [], act: [], vin: [], model: [], adv: [], cw: [], lvg: [], split: [], payer: [], mat: [], cust: [] }, I = {};
+  // per RO group: the customer name (index into D.cust, -1 = none); per RO group and part number: units, revenue, discount
+  const gcust = [], plMap = new Map(), plines = [];
   for (const k in D) I[k] = new Map();
   const ix = (k, v) => { let i = I[k].get(v); if (i === undefined) { i = D[k].length; D[k].push(v); I[k].set(v, i); } return i; };
   const jobs = [], jobIx = new Map(), jobCount = [];
@@ -208,7 +212,8 @@ function parseTxnRows(rows, fileName) {
     const k = [day, pI, aI, order, ix('vin', vin), mI, ix('adv', str(g(r, 'adviser'))), cI, lI, sI, pyI];
     const key = k.join('|');
     let grp = groups.get(key);
-    if (!grp) { grp = k.concat([0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0]); groups.set(key, grp); gIndex.set(grp, out.length); out.push(grp); }
+    if (!grp) { grp = k.concat([0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0]); groups.set(key, grp); gIndex.set(grp, out.length); out.push(grp); gcust.push(-1); }
+    if (map.cust != null) { const gi = gIndex.get(grp); if (gcust[gi] < 0) { const cv = str(g(r, 'cust')); if (cv) gcust[gi] = ix('cust', cv); } }
     { const cr = toDay(g(r, 'created')); if (cr && (!grp[23] || cr < grp[23])) grp[23] = cr; }
     { const jt = (job || '(no job description)').replace(/\s+/g, ' ').slice(0, 140); let oj = opJobIx.get(jt); if (oj === undefined) { oj = opJobs.length; opJobs.push(jt); opJobIx.set(jt, oj); }
       const gi = gIndex.get(grp), ok = gi + '|' + oj; let o = opMap.get(ok); if (!o) { o = [gi, oj, 0, 0, 0, 0, 0]; opMap.set(ok, o); ops.push(o); }
@@ -228,12 +233,17 @@ function parseTxnRows(rows, fileName) {
       let pg = pgroups.get(pk);
       if (!pg) { pg = [ymOf(day), pI, aI, cI, lI, mat, mI, pJobI, sI, 0, 0, 0, 0, new Set(), foad]; pgroups.set(pk, pg); pout.push(pg); }
       pg[9] += net; pg[10] += disc; pg[11] += qty; pg[12]++; pg[13].add(pI + '|' + order);
+      // the same parts line linked to its RO group, so the vehicle (VIN), RO and customer of each part can be listed
+      const gi = gIndex.get(grp), plk = gi + '|' + mat; let pl = plMap.get(plk);
+      if (!pl) { pl = [gi, mat, 0, 0, 0]; plMap.set(plk, pl); plines.push(pl); }
+      pl[2] += qty; pl[3] += net; pl[4] += disc;
     }
   }
   const r2 = v => Math.round(v * 100) / 100;
   for (const grp of out) { for (const j of [11, 12, 17, 18, 19, 21, 22, 23]) grp[j] = r2(grp[j]); grp[20] = Math.round(grp[20] * 1000) / 1000; st.storedNet += grp[11]; }
   for (const o of ops) { o[2] = r2(o[2]); o[3] = r2(o[3]); o[4] = r2(o[4]); o[5] = r2(o[5]); o[6] = Math.round(o[6] * 1000) / 1000; }
   for (const pg of pout) { pg[9] = r2(pg[9]); pg[10] = r2(pg[10]); pg[11] = Math.round(pg[11] * 1000) / 1000; pg[13] = pg[13].size; }
+  for (const pl of plines) { pl[2] = Math.round(pl[2] * 1000) / 1000; pl[3] = r2(pl[3]); pl[4] = r2(pl[4]); }
   st.net = Math.round(st.net * 100) / 100; st.storedNet = Math.round(st.storedNet * 100) / 100; st.disc = Math.round(st.disc * 100) / 100;
   let period = null, best = -1;
   for (const [ym, m] of Object.entries(st.months)) if (m.lines > best) { best = m.lines; period = ym; }
@@ -241,7 +251,7 @@ function parseTxnRows(rows, fileName) {
   st.groups = out.length;
   return {
     ok: true, kind: 'txn', header: hdr, map, period, fileYm: fy ? ymStr(fy) : null, stats: st,
-    asset: { v: 4, kind: 'txn', dicts: D, jobs, jobCount, rows: out, parts: pout, exsrv, opJobs, ops, issues },
+    asset: { v: 5, kind: 'txn', dicts: D, jobs, jobCount, rows: out, parts: pout, exsrv, opJobs, ops, issues, plines, gcust },
   };
 }
 
@@ -647,6 +657,11 @@ function buildStore(assets, cfg, schedules) {
   const cats = partCategories(cfg); S.partCats = cats.list;
   const svcCat = cats.index.service, otherCat = cats.index.other, override = cfg.partOverride || {};
   let p = 0, q = 0; S.exList = [];
+  // part lines linked to their RO group (row): VIN, RO and customer of every part sold (files imported from v5 on)
+  let nPL = 0; for (const a of assets) nPL += (a.plines || []).length;
+  const PL = S.PL = { n: 0, row: new Int32Array(nPL), mat: new Int32Array(nPL), qty: new Float64Array(nPL), net: new Float64Array(nPL) };
+  S.plLoaded = assets.length > 0 && assets.every(a => Array.isArray(a.plines));
+  S.cust = new Int32Array(n).fill(-1); S.custNames = []; const cuM = new Map(); let pli = 0;
   let nO = 0; for (const a of assets) nO += (a.ops || []).length;
   const O = S.O = { n: nO, row: new Int32Array(nO), job: new Int32Array(nO), net: new Float64Array(nO), netL: new Float64Array(nO), netP: new Float64Array(nO), hrs: new Float64Array(nO) };
   S.opJobs = []; S.opMembers = []; const opM = new Map(); let o = 0;
@@ -698,6 +713,8 @@ function buildStore(assets, cfg, schedules) {
     { const jt = (a.opJobs || []).map(t0 => { const t = opAlias[t0] || t0; let i = opM.get(t); if (i === undefined) { i = S.opJobs.length; S.opJobs.push(t); opM.set(t, i); S.opMembers.push([]); } if (t !== t0 && !S.opMembers[i].includes(t0)) S.opMembers[i].push(t0); return i; });
       for (const r of a.ops || []) { const pp = p0 + r[0]; if (pp >= p) continue; O.row[o] = pp; O.job[o] = jt[r[1]]; O.net[o] = r[2]; O.netL[o] = r[3]; O.netP[o] = r[4]; O.hrs[o] = r[6]; o++; } }
     for (const e of a.exsrv || []) { const pp = p0 + e[0]; if (pp < p) S.exList.push({ p: pp, net: e[1], disc: e[2], lop: e[3], job: e[4] }); }
+    if (a.gcust) { const custT = (D.cust || []).map(v => intern(S.custNames, cuM, v)); a.gcust.forEach((c, j) => { if (c >= 0 && p0 + j < p) S.cust[p0 + j] = custT[c]; }); }
+    for (const e of a.plines || []) { const pp = p0 + e[0]; if (pp >= p) continue; PL.row[pli] = pp; PL.mat[pli] = matT[e[1]]; PL.qty[pli] = e[2]; PL.net[pli] = e[3]; pli++; }
     for (const r of a.parts || []) {
       const [ym, pi, ai, ci, li, mati, mi, ji, si, net, disc, qty, lines, ros, foadP] = r;
       const pt = plantT[pi]; let [act, scope] = resolve(pt, ai, li, -1);
@@ -715,7 +732,7 @@ function buildStore(assets, cfg, schedules) {
       q++;
     }
   }
-  O.n = o;
+  O.n = o; PL.n = pli;
   // per distinct job text: normalised text, operation group, km milestone
   const groupsC = (cfg.opGroups && cfg.opGroups.length ? cfg.opGroups : DEFAULT_OP_GROUPS()).map(g => ({ name: g.name, re: safeRe(g.pattern || '') })).filter(g => g.name);
   S.opGroups = groupsC.map(g => g.name).concat(['Other']);
